@@ -1,6 +1,11 @@
-/target
-/config
-/translation
-/term
-/.idea
-.Cargo.lock
+/target/
+
+/config/
+
+/translation/
+
+/term/
+
+/.idea/
+
+/.Cargo.lock
