@@ -2,3 +2,5 @@
 /config
 /translation
 /term
+/.idea
+.Cargo.lock
