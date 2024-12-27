@@ -18,6 +18,7 @@ pub struct LazyFileReader {
     chunk_size: usize,
     buffer: Vec<String>,
     call_count: usize,
+    read_count: usize
 }
 
 impl LazyFileReader {
@@ -36,37 +37,50 @@ impl LazyFileReader {
             chunk_size,
             buffer: Vec::new(),
             call_count: 0,
+            read_count: 0
         })
     }
 
     pub async fn read_next_chunk(&mut self) -> io::Result<Option<String>> {
         self.call_count += 1;
-        self.buffer.clear();
-        let mut lines_read = 0;
+        loop {
+            self.read_count += 1;
+            self.buffer.clear();
+            let mut lines_read = 0;
 
-        while lines_read < self.chunk_size {
-            let mut line = String::new();
-            let bytes_read = self.reader.read_line(&mut line).await?;
+            while lines_read < self.chunk_size {
+                let mut line = String::new();
+                let bytes_read = self.reader.read_line(&mut line).await?;
 
-            if bytes_read == 0 {
-                break;
+                if bytes_read == 0 {
+                    break;
+                }
+
+                line = line.trim_end().to_string();
+                self.buffer.push(line);
+                lines_read += 1;
             }
 
-            line = line.trim_end().to_string();
-            self.buffer.push(line);
-            lines_read += 1;
-        }
+            if self.buffer.is_empty() {
+                return Err(Error::new(ErrorKind::UnexpectedEof, "文件已读取完毕"));
+            }
 
-        if self.buffer.is_empty() {
-            Err(Error::new(ErrorKind::UnexpectedEof, "文件已读取完毕"))
-        } else {
-            Ok(Some(self.buffer.join("\n")))
+            if !self.buffer.iter().all(|line| line.trim().is_empty()) {
+                return Ok(Some(self.buffer.join("\n")));
+            }
         }
     }
 
 
+
+
+
     pub fn get_call_count(&self) -> usize {
         self.call_count
+    }
+
+    pub fn get_read_count(&self) -> usize {
+        self.read_count
     }
 }
 

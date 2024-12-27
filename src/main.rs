@@ -12,6 +12,7 @@ use serde_json::Value;
 use std::io::{self, Write};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc::Sender;
 
 #[tokio::main]
 async fn main() {
@@ -32,7 +33,7 @@ async fn main() {
     let num_lines = get_num_lines();
     let task_num = get_task_num();
 
-    let (tx, rx) = mpsc::channel::<(usize, Result<Value, String>)>(1024);
+    let (tx, rx) = mpsc::channel::<(usize, usize, Result<Value, String>)>(1024);
 
     let reader = Arc::new(Mutex::new(LazyFileReader::new(&input_file_path, num_lines, config_data.history_lines).await.unwrap()));
     let api_config = Arc::new(get_api_config().unwrap());
@@ -134,7 +135,7 @@ async fn spawn_translation_tasks(
     config_data: Arc<ConfigData>,
     term: Arc<String>,
     reader: Arc<Mutex<LazyFileReader>>,
-    tx: mpsc::Sender<(usize, Result<Value, String>)>
+    tx: Sender<(usize, usize, Result<Value, String>)>
 ) -> Vec<tokio::task::JoinHandle<()>> {
     let mut handles = Vec::new();
 
@@ -159,23 +160,24 @@ async fn create_task(
     config_data: Arc<ConfigData>,
     term: Arc<String>,
     reader: Arc<Mutex<LazyFileReader>>,
-    tx: mpsc::Sender<(usize, Result<Value, String>)>
+    tx: Sender<(usize, usize, Result<Value, String>)>
 ) -> () {
     loop {
         println!("工作流{}正在读取下一块数据...\n", task_id);
-        let (chunk, count);
+        let (chunk, count, read_count);
         {
             let mut reader = reader.lock().await;
             chunk = reader.read_next_chunk().await;
             count = reader.get_call_count();
+            read_count = reader.get_read_count();
         }
 
         if let Ok(Some(value)) = chunk {
             let result = process_task(&config_data, &api_config, &term, value).await;
-            tx.send((count, result)).await.unwrap();
+            tx.send((count, read_count, result)).await.unwrap();
         } else {
             println!("工作流{}已结束\n", task_id);
-            tx.send((0, Err("文件结束".to_string()))).await.unwrap();
+            tx.send((0, 0, Err("文件结束".to_string()))).await.unwrap();
             break;
         }
     }
@@ -197,8 +199,8 @@ async fn process_task(config_data: &Arc<ConfigData>, api_config: &Arc<APIConfig>
 
 async fn process_results(
     task_num: usize,
-    tx: mpsc::Sender<(usize, Result<Value, String>)>,
-    mut rx: mpsc::Receiver<(usize, Result<Value, String>)>,
+    tx: Sender<(usize, usize, Result<Value, String>)>,
+    mut rx: mpsc::Receiver<(usize, usize, Result<Value, String>)>,
     num_lines: usize,
     output_key: &str,
     input_file_base_name: &str,
@@ -214,14 +216,15 @@ async fn process_results(
             break;
         }
 
-        if let Some((count, result)) = rx.recv().await {
-            handle_message(count, result, &mut received, &mut end, num_lines, output_key, input_file_base_name, config_data, term, &tx).await;
+        if let Some((count, read_count, result)) = rx.recv().await {
+            handle_message(count, read_count, result, &mut received, &mut end, num_lines, output_key, input_file_base_name, config_data, term, &tx).await;
         }
     }
 }
 
 async fn handle_message(
     count: usize,
+    read_count: usize,
     result: Result<Value, String>,
     received: &mut usize,
     end: &mut usize,
@@ -230,20 +233,21 @@ async fn handle_message(
     input_file_base_name: &str,
     config_data: &ConfigData,
     term: &Arc<String>,
-    tx: &mpsc::Sender<(usize, Result<Value, String>)>
+    tx: &Sender<(usize, usize, Result<Value, String>)>
 ) {
     if count == 0 {
         *end += 1;
     } else if count == *received + 1 {
-        process_normal_result(count, result, output_key, input_file_base_name, config_data, term, num_lines).await;
+        process_normal_result(count, read_count, result, output_key, input_file_base_name, config_data, term, num_lines).await;
         *received += 1;
     } else {
-        tx.send((count, result)).await.unwrap();
+        tx.send((count, read_count, result)).await.unwrap();
     }
 }
 
 async fn process_normal_result(
     count: usize,
+    read_count: usize,
     result: Result<Value, String>,
     output_key: &str,
     input_file_base_name: &str,
@@ -255,7 +259,7 @@ async fn process_normal_result(
         let translation = data.get(output_key).unwrap().as_str().unwrap();
         write_translation_to_file(input_file_base_name, config_data, translation).await;
         write_term_if_needed(term, input_file_base_name).await;
-        update_config_data(config_data, input_file_base_name, config_data.history_lines + count * num_lines).await;
+        update_config_data(config_data, input_file_base_name, config_data.history_lines + read_count * num_lines).await;
         println!("chunk {} 已返回结果", count);
     } else {
         println!("chunk {} 未返回结果", count);

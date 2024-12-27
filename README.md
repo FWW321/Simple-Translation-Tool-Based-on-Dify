@@ -27,4 +27,5 @@
 
 ### one-hub
 
-如果想使用one-hub作为Dify的模型供应商，需要将Dify的docker-compose.yaml替换为上面的docker-compose.yaml，在Dify的模型供应商中找到OpenAI兼容，base_url为http://one-hub:3000/v1。
+想使用one-hub作为Dify的模型供应商，需要将Dify的docker-compose.yaml替换为上面的docker-compose.yaml，在Dify的模型供应商中找到OpenAI兼容，base_url为http://one-hub:3000/v1。
+
